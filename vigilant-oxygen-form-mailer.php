@@ -12,17 +12,51 @@ if (!defined('ABSPATH')) {
 
 define('VIGILANT_OXYGEN_FORM_MAILER_OPTION', 'vigilant_oxygen_form_mailer_settings');
 
+function vigilant_oxygen_form_mailer_default_settings()
+{
+    return [
+        'to_email' => 'info@vigilant-inc.com',
+        'bcc_emails' => '',
+        'from_email' => 'spillari@gmail.com',
+        'from_name' => 'Vigilant Technologies',
+        'send_customer_receipt' => '1',
+        'customer_subject' => 'Thank you — we’ve received your submission',
+        'customer_message' => "Thank you for reaching out to Vigilant 360. Your submission has been received and is currently being reviewed by our team.\n\nWe’ll make sure the right professional follows up with you as soon as possible.\n\nIf you need assistance in the meantime or would like to talk to us immediately, please contact me directly at 313-715-6988 or swebster@vigilant-inc.com.\n\nBest regards,\nSarah Webster\nChief Marketing Officer\nVigilant 360",
+    ];
+}
+
 register_activation_hook(__FILE__, function () {
     if (!get_option(VIGILANT_OXYGEN_FORM_MAILER_OPTION)) {
-        add_option(VIGILANT_OXYGEN_FORM_MAILER_OPTION, [
-            'to_email' => 'info@vigilant-inc.com',
-            'bcc_emails' => '',
-            'from_email' => 'info@vigilant-inc.com',
-            'from_name' => 'Vigilant Website',
-            'send_customer_receipt' => '1',
-            'customer_subject' => 'Thank you for contacting Vigilant',
-            'customer_message' => "Thank you for contacting Vigilant. We received your message and our team will follow up with you soon.",
-        ]);
+        add_option(VIGILANT_OXYGEN_FORM_MAILER_OPTION, vigilant_oxygen_form_mailer_default_settings());
+    }
+});
+
+add_action('plugins_loaded', function () {
+    $settings = get_option(VIGILANT_OXYGEN_FORM_MAILER_OPTION);
+
+    if (!is_array($settings)) {
+        update_option(VIGILANT_OXYGEN_FORM_MAILER_OPTION, vigilant_oxygen_form_mailer_default_settings());
+        return;
+    }
+
+    $defaults = vigilant_oxygen_form_mailer_default_settings();
+    $old_defaults = [
+        'from_email' => 'info@vigilant-inc.com',
+        'from_name' => 'Vigilant Website',
+        'customer_subject' => 'Thank you for contacting Vigilant',
+        'customer_message' => "Thank you for contacting Vigilant. We received your message and our team will follow up with you soon.",
+    ];
+    $changed = false;
+
+    foreach ($old_defaults as $key => $old_value) {
+        if (!isset($settings[$key]) || $settings[$key] === $old_value) {
+            $settings[$key] = $defaults[$key];
+            $changed = true;
+        }
+    }
+
+    if ($changed) {
+        update_option(VIGILANT_OXYGEN_FORM_MAILER_OPTION, $settings);
     }
 });
 
@@ -30,15 +64,7 @@ function vigilant_oxygen_form_mailer_get_settings()
 {
     $settings = get_option(VIGILANT_OXYGEN_FORM_MAILER_OPTION, []);
 
-    return wp_parse_args(is_array($settings) ? $settings : [], [
-        'to_email' => 'info@vigilant-inc.com',
-        'bcc_emails' => '',
-        'from_email' => 'info@vigilant-inc.com',
-        'from_name' => 'Vigilant Website',
-        'send_customer_receipt' => '1',
-        'customer_subject' => 'Thank you for contacting Vigilant',
-        'customer_message' => "Thank you for contacting Vigilant. We received your message and our team will follow up with you soon.",
-    ]);
+    return wp_parse_args(is_array($settings) ? $settings : [], vigilant_oxygen_form_mailer_default_settings());
 }
 
 function vigilant_oxygen_form_mailer_parse_emails($value)
@@ -178,40 +204,19 @@ function vigilant_oxygen_form_mailer_get_first_customer_email($form)
     return ['', ''];
 }
 
-function vigilant_oxygen_form_mailer_form_already_emails_customer($settings, $customer_field_id)
+function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email)
 {
-    if (!$customer_field_id) {
-        return false;
-    }
-
-    $emails = $settings['actions']['email']['emails'] ?? [];
-    $customer_token = '{' . $customer_field_id . '}';
-
-    foreach ((array) $emails as $email) {
-        if (strpos((string) ($email['to'] ?? ''), $customer_token) !== false) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-function vigilant_oxygen_form_mailer_send_customer_receipt($can_execute, $action, $extra, $form, $settings)
-{
-    if (!$can_execute || is_wp_error($can_execute)) {
-        return $can_execute;
-    }
-
     $plugin_settings = vigilant_oxygen_form_mailer_get_settings();
 
     if (empty($plugin_settings['send_customer_receipt'])) {
-        return $can_execute;
+        return false;
     }
 
-    [$customer_email, $customer_field_id] = vigilant_oxygen_form_mailer_get_first_customer_email($form);
+    $customer_email = sanitize_email($customer_email);
+    $sent_key = strtolower($customer_email);
 
-    if (!$customer_email || vigilant_oxygen_form_mailer_form_already_emails_customer($settings, $customer_field_id)) {
-        return $can_execute;
+    if (!$customer_email || !is_email($customer_email) || !empty($GLOBALS['vigilant_oxygen_form_mailer_receipts_sent'][$sent_key])) {
+        return false;
     }
 
     $bcc_emails = vigilant_oxygen_form_mailer_parse_emails($plugin_settings['bcc_emails']);
@@ -225,7 +230,7 @@ function vigilant_oxygen_form_mailer_send_customer_receipt($can_execute, $action
         return strtolower($email) !== strtolower($customer_email);
     })));
 
-    $from_email = is_email($plugin_settings['from_email']) ? sanitize_email($plugin_settings['from_email']) : 'info@vigilant-inc.com';
+    $from_email = is_email($plugin_settings['from_email']) ? sanitize_email($plugin_settings['from_email']) : 'spillari@gmail.com';
     $headers = [
         sprintf('From: %s <%s>', sanitize_text_field($plugin_settings['from_name']), $from_email),
         'Content-Type: text/html; charset=UTF-8',
@@ -235,16 +240,81 @@ function vigilant_oxygen_form_mailer_send_customer_receipt($can_execute, $action
         $headers[] = 'Bcc: ' . $email;
     }
 
-    wp_mail(
+    $sent = wp_mail(
         $customer_email,
         sanitize_text_field($plugin_settings['customer_subject']),
         wpautop(wp_kses_post($plugin_settings['customer_message'])),
         $headers
     );
 
+    if ($sent) {
+        $GLOBALS['vigilant_oxygen_form_mailer_receipts_sent'][$sent_key] = true;
+    }
+
+    return $sent;
+}
+
+function vigilant_oxygen_form_mailer_send_customer_receipt($can_execute, $action, $extra, $form, $settings)
+{
+    if (!$can_execute || is_wp_error($can_execute)) {
+        return $can_execute;
+    }
+
+    [$customer_email] = vigilant_oxygen_form_mailer_get_first_customer_email($form);
+
+    if (!$customer_email) {
+        return $can_execute;
+    }
+
+    vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email);
+
     return $can_execute;
 }
 add_filter('breakdance_form_run_action_email', 'vigilant_oxygen_form_mailer_send_customer_receipt', 20, 5);
+add_filter('breakdance_form_run_action_store_submission', 'vigilant_oxygen_form_mailer_send_customer_receipt', 20, 5);
+
+function vigilant_oxygen_form_mailer_get_first_email_from_data($data)
+{
+    foreach ((array) $data as $value) {
+        if (is_array($value) || is_object($value)) {
+            $email = vigilant_oxygen_form_mailer_get_first_email_from_data((array) $value);
+
+            if ($email) {
+                return $email;
+            }
+
+            continue;
+        }
+
+        $email = sanitize_email((string) $value);
+
+        if (is_email($email)) {
+            return $email;
+        }
+    }
+
+    return '';
+}
+
+function vigilant_oxygen_form_mailer_send_fluentform_customer_receipt($insert_id, $form_data, $form)
+{
+    $customer_email = vigilant_oxygen_form_mailer_get_first_email_from_data($form_data);
+
+    if (!$customer_email) {
+        return;
+    }
+
+    $transient_key = 'vigilant_form_receipt_' . md5('fluentform|' . $insert_id . '|' . strtolower($customer_email));
+
+    if (get_transient($transient_key)) {
+        return;
+    }
+
+    if (vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email)) {
+        set_transient($transient_key, '1', DAY_IN_SECONDS);
+    }
+}
+add_action('fluentform/submission_inserted', 'vigilant_oxygen_form_mailer_send_fluentform_customer_receipt', 20, 3);
 
 add_action('admin_init', function () {
     register_setting(
@@ -258,22 +328,14 @@ add_action('admin_init', function () {
                 return [
                     'to_email' => sanitize_email($settings['to_email'] ?? 'info@vigilant-inc.com'),
                     'bcc_emails' => implode(', ', vigilant_oxygen_form_mailer_parse_emails($settings['bcc_emails'] ?? '')),
-                    'from_email' => sanitize_email($settings['from_email'] ?? 'info@vigilant-inc.com'),
-                    'from_name' => sanitize_text_field($settings['from_name'] ?? 'Vigilant Website'),
+                    'from_email' => sanitize_email($settings['from_email'] ?? 'spillari@gmail.com'),
+                    'from_name' => sanitize_text_field($settings['from_name'] ?? 'Vigilant Technologies'),
                     'send_customer_receipt' => !empty($settings['send_customer_receipt']) ? '1' : '',
-                    'customer_subject' => sanitize_text_field($settings['customer_subject'] ?? 'Thank you for contacting Vigilant'),
+                    'customer_subject' => sanitize_text_field($settings['customer_subject'] ?? 'Thank you — we’ve received your submission'),
                     'customer_message' => wp_kses_post($settings['customer_message'] ?? ''),
                 ];
             },
-            'default' => [
-                'to_email' => 'info@vigilant-inc.com',
-                'bcc_emails' => '',
-                'from_email' => 'info@vigilant-inc.com',
-                'from_name' => 'Vigilant Website',
-                'send_customer_receipt' => '1',
-                'customer_subject' => 'Thank you for contacting Vigilant',
-                'customer_message' => "Thank you for contacting Vigilant. We received your message and our team will follow up with you soon.",
-            ],
+            'default' => vigilant_oxygen_form_mailer_default_settings(),
         ]
     );
 });
