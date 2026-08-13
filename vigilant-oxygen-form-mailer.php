@@ -719,6 +719,34 @@ add_action('admin_menu', function () {
     );
 });
 
+add_action('admin_post_vigilant_delete_form_submission', function () {
+    if (!current_user_can('manage_options')) {
+        wp_die('You do not have permission to delete submissions.');
+    }
+
+    $submission_id = isset($_POST['submission_id']) ? absint($_POST['submission_id']) : 0;
+
+    if (!$submission_id) {
+        wp_safe_redirect(admin_url('tools.php?page=vigilant-form-submissions'));
+        exit;
+    }
+
+    check_admin_referer('vigilant_delete_form_submission_' . $submission_id);
+
+    global $wpdb;
+
+    $wpdb->delete(vigilant_oxygen_form_mailer_table_name(), ['id' => $submission_id], ['%d']);
+
+    $redirect_url = admin_url('tools.php?page=vigilant-form-submissions');
+
+    if (!empty($_POST['paged'])) {
+        $redirect_url = add_query_arg('paged', absint($_POST['paged']), $redirect_url);
+    }
+
+    wp_safe_redirect($redirect_url);
+    exit;
+});
+
 function vigilant_oxygen_form_mailer_render_submissions_page()
 {
     if (!current_user_can('manage_options')) {
@@ -748,11 +776,12 @@ function vigilant_oxygen_form_mailer_render_submissions_page()
                     <th>Fields</th>
                     <th>Source URL</th>
                     <th>Email Sent</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (!$rows) : ?>
-                    <tr><td colspan="7">No submissions found.</td></tr>
+                    <tr><td colspan="8">No submissions found.</td></tr>
                 <?php endif; ?>
                 <?php foreach ($rows as $row) : ?>
                     <tr>
@@ -772,6 +801,15 @@ function vigilant_oxygen_form_mailer_render_submissions_page()
                         <td>
                             Admin: <?php echo $row->admin_email_sent ? 'Yes' : 'No'; ?><br>
                             Customer: <?php echo $row->customer_email_sent ? 'Yes' : 'No'; ?>
+                        </td>
+                        <td>
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" onsubmit="return confirm('Delete this submission?');">
+                                <input type="hidden" name="action" value="vigilant_delete_form_submission">
+                                <input type="hidden" name="submission_id" value="<?php echo esc_attr($row->id); ?>">
+                                <input type="hidden" name="paged" value="<?php echo esc_attr($page); ?>">
+                                <?php wp_nonce_field('vigilant_delete_form_submission_' . $row->id); ?>
+                                <button type="submit" class="button-link-delete">Delete</button>
+                            </form>
                         </td>
                     </tr>
                 <?php endforeach; ?>
