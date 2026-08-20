@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Vigilant Oxygen Form Mailer
  * Description: Ensures Oxygen/Breakdance form emails notify Vigilant recipients and BCC list without changing Oxygen core files.
- * Version: 1.1.4
+ * Version: 1.1.5
  * Author: CI Web Studio
  */
 
@@ -226,8 +226,10 @@ function vigilant_oxygen_form_mailer_adjust_wp_mail($args)
     $settings = vigilant_oxygen_form_mailer_get_settings();
     $to_emails = vigilant_oxygen_form_mailer_parse_emails($args['to'] ?? []);
     $main_to = sanitize_email($settings['to_email']);
+    $subject = sanitize_text_field($args['subject'] ?? '');
+    $is_customer_receipt = $subject === sanitize_text_field($settings['customer_subject']);
 
-    if (is_email($main_to) && !in_array($main_to, $to_emails, true)) {
+    if (!$is_customer_receipt && is_email($main_to) && !in_array($main_to, $to_emails, true)) {
         $to_emails[] = $main_to;
     }
 
@@ -599,11 +601,6 @@ function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email
     }
 
     $bcc_emails = vigilant_oxygen_form_mailer_parse_emails($plugin_settings['bcc_emails']);
-    $main_to = sanitize_email($plugin_settings['to_email']);
-
-    if (is_email($main_to)) {
-        $bcc_emails[] = $main_to;
-    }
 
     $bcc_emails = array_values(array_unique(array_filter($bcc_emails, static function ($email) use ($customer_email) {
         return strtolower($email) !== strtolower($customer_email);
