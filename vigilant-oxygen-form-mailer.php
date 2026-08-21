@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Vigilant Oxygen Form Mailer
  * Description: Ensures Oxygen/Breakdance form emails notify Vigilant recipients and BCC list without changing Oxygen core files.
- * Version: 1.1.5
+ * Version: 1.1.8
  * Author: CI Web Studio
  */
 
@@ -307,6 +307,16 @@ function vigilant_oxygen_form_mailer_pretty_label($key)
     return $labels[$lower_key] ?? ucwords($key);
 }
 
+function vigilant_oxygen_form_mailer_is_public_field($field)
+{
+    $field = (array) $field;
+    $key = strtolower(trim((string) ($field['key'] ?? '')));
+    $label = strtolower(trim((string) ($field['label'] ?? '')));
+    $blocked_fields = ['uiiotk'];
+
+    return !in_array($key, $blocked_fields, true) && !in_array($label, $blocked_fields, true);
+}
+
 function vigilant_oxygen_form_mailer_flatten_fields($data, $prefix = '')
 {
     $fields = [];
@@ -314,17 +324,18 @@ function vigilant_oxygen_form_mailer_flatten_fields($data, $prefix = '')
     foreach ((array) $data as $key => $value) {
         $key = (string) $key;
 
-        if ($key === '' || $key[0] === '_') {
+        if ($key === '' || $key[0] === '_' || strtolower($key) === 'uiiotk') {
             continue;
         }
 
         $label = $prefix ? $prefix . ' ' . vigilant_oxygen_form_mailer_pretty_label($key) : vigilant_oxygen_form_mailer_pretty_label($key);
 
         if (is_array($value) || is_object($value)) {
+            $value_array = (array) $value;
             $name_parts = array_filter([
-                vigilant_oxygen_form_mailer_flatten_value($value['first_name'] ?? ''),
-                vigilant_oxygen_form_mailer_flatten_value($value['middle_name'] ?? ''),
-                vigilant_oxygen_form_mailer_flatten_value($value['last_name'] ?? ''),
+                vigilant_oxygen_form_mailer_flatten_value($value_array['first_name'] ?? ''),
+                vigilant_oxygen_form_mailer_flatten_value($value_array['middle_name'] ?? ''),
+                vigilant_oxygen_form_mailer_flatten_value($value_array['last_name'] ?? ''),
             ]);
 
             if (!$prefix && $name_parts) {
@@ -336,7 +347,7 @@ function vigilant_oxygen_form_mailer_flatten_fields($data, $prefix = '')
                 continue;
             }
 
-            $children = vigilant_oxygen_form_mailer_flatten_fields((array) $value, $label);
+            $children = vigilant_oxygen_form_mailer_flatten_fields($value_array, $label);
 
             if ($children) {
                 $fields = array_merge($fields, $children);
@@ -359,6 +370,10 @@ function vigilant_oxygen_form_mailer_fields_text($fields)
     $lines = [];
 
     foreach ((array) $fields as $field) {
+        if (!vigilant_oxygen_form_mailer_is_public_field($field)) {
+            continue;
+        }
+
         $label = trim((string) ($field['label'] ?? 'Field'));
         $value = vigilant_oxygen_form_mailer_flatten_value($field['value'] ?? '');
 
@@ -414,6 +429,20 @@ function vigilant_oxygen_form_mailer_build_admin_body($submission)
 {
     $fields_text = trim((string) ($submission['fields_text'] ?? ''));
     $source_url = trim((string) ($submission['source_url'] ?? ''));
+    $page_title = '';
+
+    if ($source_url && function_exists('url_to_postid')) {
+        $post_id = url_to_postid($source_url);
+
+        if (!$post_id) {
+            $source_path = wp_parse_url($source_url, PHP_URL_PATH);
+            $post_id = $source_path ? url_to_postid(home_url($source_path)) : 0;
+        }
+
+        if ($post_id) {
+            $page_title = get_the_title($post_id);
+        }
+    }
 
     $body = $fields_text !== '' ? $fields_text : 'No form fields were submitted.';
     $body .= "\n\n--\nThis is a notification that a contact form was submitted on your\nwebsite";
@@ -424,6 +453,10 @@ function vigilant_oxygen_form_mailer_build_admin_body($submission)
 
     $body .= '.';
 
+    if ($page_title !== '') {
+        $body .= ' ' . sanitize_text_field($page_title);
+    }
+
     return $body;
 }
 
@@ -431,7 +464,7 @@ function vigilant_oxygen_form_mailer_store_submission($submission)
 {
     global $wpdb;
 
-    $fields = (array) ($submission['fields'] ?? []);
+    $fields = array_values(array_filter((array) ($submission['fields'] ?? []), 'vigilant_oxygen_form_mailer_is_public_field'));
     $fields_text = vigilant_oxygen_form_mailer_fields_text($fields);
     $source_url = vigilant_oxygen_form_mailer_source_url_from_request($submission['source_url'] ?? '');
     $source_id = (string) ($submission['source_id'] ?? '');
@@ -497,7 +530,8 @@ function vigilant_oxygen_form_mailer_handle_submission($submission)
 {
     global $wpdb;
 
-    $fields = (array) ($submission['fields'] ?? []);
+    $fields = array_values(array_filter((array) ($submission['fields'] ?? []), 'vigilant_oxygen_form_mailer_is_public_field'));
+    $submission['fields'] = $fields;
     $source_url = vigilant_oxygen_form_mailer_source_url_from_request($submission['source_url'] ?? '');
     $dedupe_key = md5(($submission['source'] ?? '') . '|' . ($submission['source_id'] ?? '') . '|' . $source_url . '|' . wp_json_encode($fields));
 
@@ -509,7 +543,7 @@ function vigilant_oxygen_form_mailer_handle_submission($submission)
     $stored = vigilant_oxygen_form_mailer_store_submission($submission);
     $stored['row']['id'] = $stored['id'];
     $admin_sent = vigilant_oxygen_form_mailer_send_admin_notification($stored['row']);
-    $customer_sent = !empty($submission['customer_email']) ? vigilant_oxygen_form_mailer_send_customer_receipt_email($submission['customer_email']) : false;
+    $customer_sent = !empty($submission['customer_email']) ? vigilant_oxygen_form_mailer_send_customer_receipt_email($submission['customer_email'], $stored['row']) : false;
 
     if ($stored['id']) {
         $wpdb->update(
@@ -527,23 +561,87 @@ function vigilant_oxygen_form_mailer_handle_submission($submission)
     return $stored;
 }
 
-function vigilant_oxygen_form_mailer_breakdance_submission($form, $extra, $settings)
+function vigilant_oxygen_form_mailer_breakdance_fields($form, $extra)
 {
-    $fields = [];
+    $form_array = (array) $form;
+    $extra_array = (array) $extra;
+    $candidates = [
+        $form_array['fields'] ?? [],
+        $form_array['form']['fields'] ?? [],
+        $form_array['data'] ?? [],
+        $form_array['values'] ?? [],
+        $extra_array['fields'] ?? [],
+        $extra_array['data'] ?? [],
+        $extra_array['submission'] ?? [],
+        $form,
+        $_POST,
+    ];
 
-    foreach ((array) $form as $field) {
-        $key = $field['advanced']['id'] ?? ($field['name'] ?? ($field['type'] ?? 'field'));
-        $label = $field['label'] ?? ($field['advanced']['label'] ?? vigilant_oxygen_form_mailer_pretty_label($key));
-        $value = $field['value'] ?? '';
+    foreach ($candidates as $candidate) {
+        $candidate = (array) $candidate;
 
-        $fields[] = [
-            'key' => (string) $key,
-            'label' => vigilant_oxygen_form_mailer_pretty_label($label),
-            'value' => $value,
-        ];
+        if (!$candidate) {
+            continue;
+        }
+
+        $is_field_list = false;
+
+        foreach ($candidate as $item) {
+            $item = (array) $item;
+
+            if (array_key_exists('value', $item) && (isset($item['label']) || isset($item['name']) || isset($item['type']) || isset($item['advanced']))) {
+                $is_field_list = true;
+                break;
+            }
+        }
+
+        if (!$is_field_list) {
+            $flattened = vigilant_oxygen_form_mailer_flatten_fields($candidate);
+
+            if ($flattened) {
+                return $flattened;
+            }
+
+            continue;
+        }
+
+        $fields = [];
+
+        foreach ($candidate as $field) {
+            $field = (array) $field;
+            $advanced = (array) ($field['advanced'] ?? []);
+            $key = $advanced['id'] ?? ($field['id'] ?? ($field['name'] ?? ($field['label'] ?? ($field['type'] ?? 'field'))));
+            $label = $field['label'] ?? ($advanced['label'] ?? vigilant_oxygen_form_mailer_pretty_label($key));
+            $field_item = [
+                'key' => (string) $key,
+                'label' => vigilant_oxygen_form_mailer_pretty_label($label),
+                'value' => $field['value'] ?? '',
+            ];
+
+            if (!vigilant_oxygen_form_mailer_is_public_field($field_item)) {
+                continue;
+            }
+
+            $fields[] = $field_item;
+        }
+
+        if ($fields) {
+            return $fields;
+        }
     }
 
+    return [];
+}
+
+function vigilant_oxygen_form_mailer_breakdance_submission($form, $extra, $settings)
+{
+    $fields = vigilant_oxygen_form_mailer_breakdance_fields($form, $extra);
     [$customer_email] = vigilant_oxygen_form_mailer_get_first_customer_email($form);
+
+    if (!$customer_email) {
+        $customer_email = vigilant_oxygen_form_mailer_find_field_value($fields, ['email']);
+    }
+
     $customer_name = vigilant_oxygen_form_mailer_find_field_value($fields, ['name', 'first name']);
 
     return [
@@ -585,7 +683,7 @@ function vigilant_oxygen_form_mailer_fluentform_submission($insert_id, $form_dat
     ];
 }
 
-function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email)
+function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email, $submission = [])
 {
     $plugin_settings = vigilant_oxygen_form_mailer_get_settings();
 
@@ -616,10 +714,17 @@ function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email
         $headers[] = 'Bcc: ' . $email;
     }
 
+    $message = wp_kses_post($plugin_settings['customer_message']);
+    $admin_body = $submission ? vigilant_oxygen_form_mailer_build_admin_body($submission) : '';
+
+    if ($admin_body !== '') {
+        $message .= "\n\n" . esc_html($admin_body);
+    }
+
     $sent = wp_mail(
         $customer_email,
         sanitize_text_field($plugin_settings['customer_subject']),
-        wpautop(wp_kses_post($plugin_settings['customer_message'])),
+        wpautop($message),
         $headers
     );
 
