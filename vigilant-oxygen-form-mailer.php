@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Vigilant Oxygen Form Mailer
  * Description: Ensures Oxygen/Breakdance form emails notify Vigilant recipients and BCC list without changing Oxygen core files.
- * Version: 1.2.1
+ * Version: 1.2.2
  * Author: CI Web Studio
  */
 
@@ -21,7 +21,7 @@ function vigilant_oxygen_form_mailer_default_settings()
         'bcc_emails' => '',
         'from_email' => 'spillari@gmail.com',
         'from_name' => 'Vigilant Technologies',
-        'admin_subject' => 'Thanks for Your Interest in Vigilant',
+        'admin_subject' => 'New contact form message',
         'send_customer_receipt' => '1',
         'customer_subject' => 'Thank you — we’ve received your submission',
         'customer_message' => "Thank you for reaching out to Vigilant 360. Your submission has been received and is currently being reviewed by our team.\n\nWe’ll make sure the right professional follows up with you as soon as possible.\n\nIf you need assistance in the meantime or would like to talk to us immediately, please contact me directly at 313-715-6988 or swebster@vigilant-inc.com.\n\nBest regards,\nSarah Webster\nChief Marketing Officer\nVigilant 360",
@@ -93,6 +93,7 @@ add_action('plugins_loaded', function () {
     $old_defaults = [
         'from_email' => 'info@vigilant-inc.com',
         'from_name' => 'Vigilant Website',
+        'admin_subject' => 'Thanks for Your Interest in Vigilant',
         'customer_subject' => 'Thank you for contacting Vigilant',
         'customer_message' => "Thank you for contacting Vigilant. We received your message and our team will follow up with you soon.",
     ];
@@ -731,24 +732,19 @@ function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email
         $headers[] = 'Bcc: ' . $email;
     }
 
+    $message = wp_kses_post($plugin_settings['customer_message']);
+    $admin_body = $submission ? vigilant_oxygen_form_mailer_build_admin_body($submission) : '';
+
+    if ($admin_body !== '') {
+        $message .= "\n\n" . esc_html($admin_body);
+    }
+
     $sent = wp_mail(
         $customer_email,
         sanitize_text_field($plugin_settings['customer_subject']),
-        wpautop(wp_kses_post($plugin_settings['customer_message'])),
+        wpautop($message),
         $headers
     );
-
-    if ($sent && $submission) {
-        wp_mail(
-            $customer_email,
-            sanitize_text_field($plugin_settings['admin_subject']),
-            vigilant_oxygen_form_mailer_build_admin_body($submission),
-            [
-                sprintf('From: %s <%s>', sanitize_text_field($plugin_settings['from_name']), $from_email),
-                'Content-Type: text/plain; charset=UTF-8',
-            ]
-        );
-    }
 
     if ($sent) {
         $GLOBALS['vigilant_oxygen_form_mailer_receipts_sent'][$sent_key] = true;
