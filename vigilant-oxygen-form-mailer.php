@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Vigilant Oxygen Form Mailer
  * Description: Ensures Oxygen/Breakdance form emails notify Vigilant recipients and BCC list without changing Oxygen core files.
- * Version: 1.2.2
+ * Version: 1.2.4
  * Author: CI Web Studio
  */
 
@@ -200,16 +200,6 @@ function vigilant_oxygen_form_mailer_add_form_headers($headers)
 
     $settings = vigilant_oxygen_form_mailer_get_settings();
     $headers = (array) $headers;
-    $bcc_emails = vigilant_oxygen_form_mailer_parse_emails($settings['bcc_emails']);
-
-    if ($bcc_emails) {
-        foreach ($bcc_emails as $email) {
-            if (!vigilant_oxygen_form_mailer_header_has_email($headers, 'Bcc', $email)) {
-                $headers[] = 'Bcc: ' . $email;
-            }
-        }
-    }
-
     $headers = vigilant_oxygen_form_mailer_ensure_from_header($headers, $settings['from_name'], $settings['from_email']);
 
     return $headers;
@@ -530,6 +520,15 @@ function vigilant_oxygen_form_mailer_send_admin_notification($submission)
         sprintf('From: %s <%s>', sanitize_text_field($settings['from_name']), $from_email),
         'Content-Type: text/plain; charset=UTF-8',
     ];
+    $bcc_emails = vigilant_oxygen_form_mailer_parse_emails($settings['bcc_emails']);
+    $bcc_emails = array_values(array_unique(array_filter($bcc_emails, static function ($email) use ($to_email) {
+        return strtolower($email) !== strtolower($to_email);
+    })));
+
+    foreach ($bcc_emails as $email) {
+        $headers[] = 'Bcc: ' . $email;
+    }
+
     $customer_email = sanitize_email($submission['customer_email'] ?? '');
 
     if ($customer_email) {
@@ -655,6 +654,11 @@ function vigilant_oxygen_form_mailer_breakdance_submission($form, $extra, $setti
 {
     $fields = vigilant_oxygen_form_mailer_breakdance_fields($form, $extra);
     [$customer_email] = vigilant_oxygen_form_mailer_get_first_customer_email($form);
+    $source_url = $extra['referer'] ?? '';
+
+    if (!$source_url && !empty($extra['postId']) && function_exists('get_permalink')) {
+        $source_url = get_permalink((int) $extra['postId']);
+    }
 
     if (!$customer_email) {
         $customer_email = vigilant_oxygen_form_mailer_find_field_value($fields, ['email']);
@@ -667,7 +671,7 @@ function vigilant_oxygen_form_mailer_breakdance_submission($form, $extra, $setti
         'source_id' => md5('breakdance|' . ($extra['postId'] ?? '') . '|' . ($extra['formId'] ?? '') . '|' . wp_json_encode($fields) . '|' . ($extra['referer'] ?? '')),
         'form_id' => (string) ($extra['formId'] ?? ''),
         'form_name' => $settings['form']['form_name'] ?? 'Breakdance Form',
-        'source_url' => $extra['referer'] ?? '',
+        'source_url' => $source_url,
         'customer_email' => $customer_email,
         'customer_name' => $customer_name,
         'fields' => $fields,
@@ -716,33 +720,16 @@ function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email
         return false;
     }
 
-    $bcc_emails = vigilant_oxygen_form_mailer_parse_emails($plugin_settings['bcc_emails']);
-
-    $bcc_emails = array_values(array_unique(array_filter($bcc_emails, static function ($email) use ($customer_email) {
-        return strtolower($email) !== strtolower($customer_email);
-    })));
-
     $from_email = is_email($plugin_settings['from_email']) ? sanitize_email($plugin_settings['from_email']) : 'spillari@gmail.com';
     $headers = [
         sprintf('From: %s <%s>', sanitize_text_field($plugin_settings['from_name']), $from_email),
         'Content-Type: text/html; charset=UTF-8',
     ];
 
-    foreach ($bcc_emails as $email) {
-        $headers[] = 'Bcc: ' . $email;
-    }
-
-    $message = wp_kses_post($plugin_settings['customer_message']);
-    $admin_body = $submission ? vigilant_oxygen_form_mailer_build_admin_body($submission) : '';
-
-    if ($admin_body !== '') {
-        $message .= "\n\n" . esc_html($admin_body);
-    }
-
     $sent = wp_mail(
         $customer_email,
         sanitize_text_field($plugin_settings['customer_subject']),
-        wpautop($message),
+        wpautop(wp_kses_post($plugin_settings['customer_message'])),
         $headers
     );
 
