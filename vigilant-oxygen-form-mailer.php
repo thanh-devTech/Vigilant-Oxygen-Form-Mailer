@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Vigilant Oxygen Form Mailer
  * Description: Ensures Oxygen/Breakdance form emails notify Vigilant recipients and BCC list without changing Oxygen core files.
- * Version: 1.1.8
+ * Version: 1.1.9
  * Author: CI Web Studio
  */
 
@@ -445,7 +445,7 @@ function vigilant_oxygen_form_mailer_build_admin_body($submission)
     }
 
     $body = $fields_text !== '' ? $fields_text : 'No form fields were submitted.';
-    $body .= "\n\n--\nThis is a notification that a contact form was submitted on your\nwebsite";
+    $body .= "\n\n-----------------\nThis is a notification that a contact form was submitted on your\nwebsite";
 
     if ($source_url !== '') {
         $body .= ' (' . $source_url . ')';
