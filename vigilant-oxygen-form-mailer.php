@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Vigilant Oxygen Form Mailer
  * Description: Ensures Oxygen/Breakdance form emails notify Vigilant recipients and BCC list without changing Oxygen core files.
- * Version: 1.1.9
+ * Version: 1.2.0
  * Author: CI Web Studio
  */
 
@@ -714,19 +714,24 @@ function vigilant_oxygen_form_mailer_send_customer_receipt_email($customer_email
         $headers[] = 'Bcc: ' . $email;
     }
 
-    $message = wp_kses_post($plugin_settings['customer_message']);
-    $admin_body = $submission ? vigilant_oxygen_form_mailer_build_admin_body($submission) : '';
-
-    if ($admin_body !== '') {
-        $message .= "\n\n" . esc_html($admin_body);
-    }
-
     $sent = wp_mail(
         $customer_email,
         sanitize_text_field($plugin_settings['customer_subject']),
-        wpautop($message),
+        wpautop(wp_kses_post($plugin_settings['customer_message'])),
         $headers
     );
+
+    if ($sent && $submission) {
+        wp_mail(
+            $customer_email,
+            sanitize_text_field($plugin_settings['admin_subject']),
+            vigilant_oxygen_form_mailer_build_admin_body($submission),
+            [
+                sprintf('From: %s <%s>', sanitize_text_field($plugin_settings['from_name']), $from_email),
+                'Content-Type: text/plain; charset=UTF-8',
+            ]
+        );
+    }
 
     if ($sent) {
         $GLOBALS['vigilant_oxygen_form_mailer_receipts_sent'][$sent_key] = true;
